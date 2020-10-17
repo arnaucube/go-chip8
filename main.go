@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/rand"
+	"os"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -36,6 +37,7 @@ type chip8 struct {
 
 	// graphics
 	renderer *sdl.Renderer
+	zoom     int32
 }
 
 // Initialize registers and memory once
@@ -44,6 +46,11 @@ func (c *chip8) initialize() {
 	c.opcode = 0
 	c.index = 0
 	c.sp = 0
+	c.zoom = 10
+
+	for i := 0; i < len(fontSet); i++ {
+		c.memory[i] = fontSet[i]
+	}
 }
 
 func (c *chip8) emulateCycle() {
@@ -53,7 +60,7 @@ func (c *chip8) emulateCycle() {
 	y := byte((c.opcode & 0x00F0) >> 4)
 	nn := byte(c.opcode & 0x00FF)
 	nnn := uint16(c.opcode & 0x0FFF)
-	fmt.Printf("%X\n", c.opcode)
+	// fmt.Printf("%X\n", c.opcode)
 
 	// Decode Opcode
 	// https://en.wikipedia.org/wiki/CHIP-8#Opcode_table
@@ -92,7 +99,6 @@ func (c *chip8) emulateCycle() {
 	case 0x3000:
 		// 3XNN Skips the next instruction if VX equals NN. (Usually
 		// the next instruction is a jump to skip a code block)
-		fmt.Println(c.v[x], nn)
 		if c.v[x] == nn {
 			c.pc += 2
 		}
@@ -147,12 +153,12 @@ func (c *chip8) emulateCycle() {
 		case 0x0004:
 			// 0x8XY4 Adds VY to VX. VF is set to 1 when there's a
 			// carry, and to 0 when there isn't
-			if c.v[(c.opcode&0x00F0)>>4] > (0xFF - c.v[c.opcode&0x0F00]) {
+			if c.v[y] > (0xFF - c.v[x]) {
 				c.v[0xF] = 1
 			} else {
 				c.v[0xF] = 0
 			}
-			c.v[(c.opcode&0x0F00)>>8] += c.v[(c.opcode&0x00F0)>>4]
+			c.v[x] += c.v[y]
 			c.pc += 2
 			break
 		case 0x0005:
@@ -208,7 +214,7 @@ func (c *chip8) emulateCycle() {
 		c.pc += 2
 	case 0xA000:
 		// ANNN set index to NNN position
-		c.index = c.opcode & 0x0FFF
+		c.index = nnn
 		c.pc += 2
 		break
 	case 0xB000:
@@ -228,34 +234,25 @@ func (c *chip8) emulateCycle() {
 		// instruction. As described above, VF is set to 1 if any
 		// screen pixels are flipped from set to unset when the sprite
 		// is drawn, and to 0 if that doesn’t happen
-		fmt.Printf("D: %X\n", c.opcode)
+
 		height := c.opcode & 0x000F
 
 		var pixel byte
 		c.v[0xF] = 0
+
 		for yline := uint16(0); yline < height; yline++ {
 			pixel = c.memory[c.index+yline]
 			for xline := uint16(0); xline < 8; xline++ {
 				if (pixel & (0x80 >> xline)) != 0 {
-					if c.gfx[(w*(uint16(y)+yline)+(uint16(x)+xline))] == 1 {
+					if c.gfx[(uint16(c.v[x])+xline)+((uint16(c.v[y])+yline)*w)] == 1 {
 						c.v[0xF] = 1
 					}
-					c.gfx[w*(uint16(y)+yline)+(uint16(x)+xline)] ^= 1
+					c.gfx[(uint16(c.v[x])+xline)+((uint16(c.v[y])+yline)*w)] ^= 1
 				}
 			}
+
 		}
-		// for yline := uint16(0); yline < height; yline++ {
-		//         pixel = c.memory[c.index+yline]
-		//         for xline := uint16(0); xline < 8; xline++ {
-		//                 if (pixel & (0x80 >> xline)) != 0 {
-		//                         if c.gfx[(uint16(x)+xline+((uint16(y)+yline)*64))] == 1 {
-		//                                 c.v[0xF] = 1
-		//                         }
-		//                         c.gfx[uint16(x)+xline+((uint16(y)+yline)*64)] ^= 1
-		//                 }
-		//         }
-		//
-		// }
+
 		c.drawFlag = true
 		c.pc += 2
 		break
@@ -265,18 +262,21 @@ func (c *chip8) emulateCycle() {
 			// EX9E Skips the next instruction if the key stored in
 			// VX is pressed. (Usually the next instruction is a
 			// jump to skip a code block)
-			if c.key[c.v[(c.opcode&0x0F00)>>8]] != 0 {
-				c.pc += 4
-			} else {
+			if c.key[c.v[x]] != 0 {
 				c.pc += 2
 			}
+			c.pc += 2
 			break
 		case 0x00A1:
 			// EXA1 Skips the next instruction if the key stored in
 			// VX isn't pressed. (Usually the next instruction is a
 			// jump to skip a code block)
-			// TODO
+			if c.key[c.v[x]] != 1 {
+				c.pc += 2
+			}
 			c.pc += 2
+		default:
+			fmt.Printf("Unknown opcode [0xE000]: 0x%X\n", c.opcode)
 		}
 		break
 	case 0xF000:
@@ -289,7 +289,16 @@ func (c *chip8) emulateCycle() {
 			// FX0A A key press is awaited, and then stored in VX.
 			// (Blocking Operation. All instruction halted until
 			// next key event)
-			// TODO
+			pressed := false
+			for i := 0; i < 16; i++ {
+				if c.key[i] == 1 {
+					c.v[x] = byte(i)
+					pressed = true
+				}
+			}
+			if !pressed {
+				return
+			}
 			c.pc += 2
 		case 0x0015:
 			// FX15 Sets the delay timer to VX
@@ -333,6 +342,8 @@ func (c *chip8) emulateCycle() {
 			}
 			c.pc += 2
 			break
+		default:
+			fmt.Printf("Unknown opcode [0xF000]: 0x%X\n", c.opcode)
 		}
 		break
 	default:
@@ -387,8 +398,9 @@ func (c *chip8) setupInput() {
 }
 
 func (c *chip8) setupGraphics() {
+	fmt.Println(c.zoom)
 	window, err := sdl.CreateWindow("go-chip8", sdl.WINDOWPOS_UNDEFINED,
-		sdl.WINDOWPOS_UNDEFINED, w, h, sdl.WINDOW_SHOWN)
+		sdl.WINDOWPOS_UNDEFINED, w*c.zoom, h*c.zoom, sdl.WINDOW_SHOWN)
 	if err != nil {
 		panic(err)
 	}
@@ -399,25 +411,102 @@ func (c *chip8) setupGraphics() {
 }
 
 func (c *chip8) drawGraphics() {
+	// x := 0
+	// y := 0
+	// for i := 0; i < len(c.gfx); i++ {
+	//         if i%w == 0 {
+	//                 x = 0
+	//                 y++
+	//                 fmt.Println("")
+	//         }
+	//         if c.gfx[i]^1 == 0 {
+	//                 c.renderer.DrawPoint(int32(x), int32(y))
+	//                 fmt.Print("x")
+	//         } else {
+	//                 fmt.Print(" ")
+	//         }
+	//         x++
+	// }
+
+	// for y := 0; y < h; y++ {
+	//         for x := 0; x < w; x++ {
+	//                 pixel := c.gfx[y*w+x]
+	//                 if pixel != 0 {
+	//                         c.renderer.DrawPoint(int32(x), int32(y))
+	//                 }
+	//         }
+	// }
+
+	c.renderer.SetDrawColor(0, 0, 0, 1)
+	c.renderer.Clear()
 	c.renderer.SetDrawColor(255, 255, 255, 1)
-	x := 0
-	y := 0
-	for i := 0; i < len(c.gfx); i++ {
-		if i%w == 0 {
-			// jump line
-			x = 0
-			y++
-		}
-		if c.gfx[i]^1 == 1 {
-			c.renderer.DrawPoint(int32(x), int32(y))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			pixel := c.gfx[y*w+x]
+			if pixel != 0 {
+				c.renderer.FillRect(&sdl.Rect{
+					X: int32(x) * c.zoom,
+					Y: int32(y) * c.zoom,
+					W: c.zoom,
+					H: c.zoom,
+				})
+			}
 		}
 	}
+
 	c.renderer.Present()
 	c.drawFlag = false
 }
 
 func (c *chip8) setKeys() {
+	for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+		switch t := event.(type) {
+		case *sdl.QuitEvent:
+			println("Quit")
+			os.Exit(0)
+			// running = false
+			// break
+		case *sdl.KeyboardEvent:
+			switch t.Type {
+			case sdl.KEYDOWN:
+				if keyHex, ok := validKeys[t.Keysym.Sym]; ok {
+					fmt.Println("down", t.Keysym.Sym)
+					c.key[keyHex] = 1
+					fmt.Println(keyHex, c.key[keyHex])
+				}
+			case sdl.KEYUP:
+				if keyHex, ok := validKeys[t.Keysym.Sym]; ok {
+					fmt.Println("up", t.Keysym.Sym)
+					c.key[keyHex] = 0
+					fmt.Println(keyHex, c.key[keyHex])
+				}
+				if t.Keysym.Sym == sdl.K_ESCAPE {
+					fmt.Println("EXIT")
+					os.Exit(0)
+				}
+			}
+		}
+	}
 
+}
+
+var validKeys = map[sdl.Keycode]byte{
+	sdl.K_0: 0x00,
+	sdl.K_1: 0x01,
+	sdl.K_2: 0x02,
+	sdl.K_3: 0x03,
+	sdl.K_4: 0x04,
+	sdl.K_5: 0x05,
+	sdl.K_6: 0x06,
+	sdl.K_7: 0x07,
+	sdl.K_8: 0x08,
+	sdl.K_9: 0x09,
+	sdl.K_a: 0x0a,
+	sdl.K_b: 0x0b,
+	sdl.K_c: 0x0c,
+	sdl.K_d: 0x0d,
+	sdl.K_e: 0x0e,
+	sdl.K_f: 0x0f,
 }
 
 func main() {
@@ -426,10 +515,10 @@ func main() {
 	flag.Parse()
 
 	var c chip8
+	c.initialize()
 	c.setupGraphics()
 	c.setupInput()
 
-	c.initialize()
 	err := c.loadGame(*filepath)
 	if err != nil {
 		panic(err)
@@ -439,7 +528,7 @@ func main() {
 		c.emulateCycle()
 		if c.drawFlag {
 			c.drawGraphics()
-			c.setKeys()
 		}
+		c.setKeys()
 	}
 }
