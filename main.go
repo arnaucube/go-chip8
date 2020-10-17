@@ -46,7 +46,7 @@ func (c *chip8) initialize() {
 	c.opcode = 0
 	c.index = 0
 	c.sp = 0
-	c.zoom = 10
+	c.zoom = 8
 
 	for i := 0; i < len(fontSet); i++ {
 		c.memory[i] = fontSet[i]
@@ -80,6 +80,7 @@ func (c *chip8) emulateCycle() {
 			// 00EE Returns from a subroutine
 			c.sp--
 			c.pc = c.stack[c.sp]
+			c.pc += 2
 			break
 		default:
 			fmt.Printf("Unknown opcode [0x0000]: 0x%X\n", c.opcode)
@@ -244,10 +245,14 @@ func (c *chip8) emulateCycle() {
 			pixel = c.memory[c.index+yline]
 			for xline := uint16(0); xline < 8; xline++ {
 				if (pixel & (0x80 >> xline)) != 0 {
-					if c.gfx[(uint16(c.v[x])+xline)+((uint16(c.v[y])+yline)*w)] == 1 {
+					pos := (uint16(c.v[x]) + xline) + ((uint16(c.v[y]) + yline) * w)
+					if pos >= 2048 {
+						break
+					}
+					if c.gfx[pos] == 1 {
 						c.v[0xF] = 1
 					}
-					c.gfx[(uint16(c.v[x])+xline)+((uint16(c.v[y])+yline)*w)] ^= 1
+					c.gfx[pos] ^= 1
 				}
 			}
 
@@ -313,7 +318,9 @@ func (c *chip8) emulateCycle() {
 			c.index += uint16(c.v[x])
 			c.pc += 2
 		case 0x0029:
-			// FX29 Sets I to the location of the sprite for the character in VX. Characters 0-F (in hexadecimal) are represented by a 4x5 font
+			// FX29 Sets I to the location of the sprite for the
+			// character in VX. Characters 0-F (in hexadecimal) are
+			// represented by a 4x5 font
 			c.index = uint16(c.v[x]) * 5
 			c.pc += 2
 			break
@@ -490,23 +497,30 @@ func (c *chip8) setKeys() {
 
 }
 
+/*
+	Key pad:     Keyboard keys:
+	1 2 3 c      1 2 3 4
+	4 5 6 d      q w e r
+	7 8 9 e      a s d f
+	a 0 b f      z x c v
+*/
 var validKeys = map[sdl.Keycode]byte{
-	sdl.K_0: 0x00,
 	sdl.K_1: 0x01,
 	sdl.K_2: 0x02,
 	sdl.K_3: 0x03,
-	sdl.K_4: 0x04,
-	sdl.K_5: 0x05,
-	sdl.K_6: 0x06,
-	sdl.K_7: 0x07,
-	sdl.K_8: 0x08,
-	sdl.K_9: 0x09,
-	sdl.K_a: 0x0a,
-	sdl.K_b: 0x0b,
-	sdl.K_c: 0x0c,
-	sdl.K_d: 0x0d,
-	sdl.K_e: 0x0e,
-	sdl.K_f: 0x0f,
+	sdl.K_4: 0x0c,
+	sdl.K_q: 0x04,
+	sdl.K_w: 0x05,
+	sdl.K_e: 0x06,
+	sdl.K_r: 0x0d,
+	sdl.K_a: 0x07,
+	sdl.K_s: 0x08,
+	sdl.K_d: 0x09,
+	sdl.K_f: 0x0e,
+	sdl.K_z: 0x0a,
+	sdl.K_x: 0x00,
+	sdl.K_c: 0x0b,
+	sdl.K_v: 0x0f,
 }
 
 func main() {
@@ -530,5 +544,6 @@ func main() {
 			c.drawGraphics()
 		}
 		c.setKeys()
+		sdl.Delay(100 / 60)
 	}
 }
