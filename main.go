@@ -4,7 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
+
+	"github.com/veandco/go-sdl2/sdl"
 )
+
+const w = 64
+const h = 32
 
 type chip8 struct {
 	opcode uint16
@@ -16,7 +22,7 @@ type chip8 struct {
 	index uint16
 	pc    uint16
 
-	gfx [64 * 32]byte
+	gfx [w * h]byte
 
 	delayTimer byte
 	soundTimer byte
@@ -27,6 +33,9 @@ type chip8 struct {
 	key [16]byte
 
 	drawFlag bool
+
+	// graphics
+	renderer *sdl.Renderer
 }
 
 // Initialize registers and memory once
@@ -40,6 +49,11 @@ func (c *chip8) initialize() {
 func (c *chip8) emulateCycle() {
 	// Fetch Opcode
 	c.opcode = uint16(c.memory[c.pc])<<8 | uint16(c.memory[c.pc+1])
+	x := byte((c.opcode & 0x0F00) >> 8)
+	y := byte((c.opcode & 0x00F0) >> 4)
+	nn := byte(c.opcode & 0x00FF)
+	nnn := uint16(c.opcode & 0x0FFF)
+	fmt.Printf("%X\n", c.opcode)
 
 	// Decode Opcode
 	// https://en.wikipedia.org/wiki/CHIP-8#Opcode_table
@@ -47,34 +61,92 @@ func (c *chip8) emulateCycle() {
 	switch c.opcode & 0xF000 {
 	case 0x0000:
 		switch c.opcode & 0x000F {
-		case 0x0000: // 0x00E0
-			// clear screen
-			// TODO
+		case 0x0000:
+			// 00E0 Clear screen
+			for i := 0; i < len(c.gfx); i++ {
+				c.gfx[i] = 0
+			}
 			c.pc += 2
+			c.drawFlag = true
 			break
-		case 0x000E: // 0x00EE
-			// TODO
+		case 0x000E:
+			// 00EE Returns from a subroutine
+			c.sp--
+			c.pc = c.stack[c.sp]
 			break
 		default:
 			fmt.Printf("Unknown opcode [0x0000]: 0x%X\n", c.opcode)
 		}
+	case 0x1000:
+		// 1NNN Jumps to address NNN
+		// c.pc = c.opcode & 0x0FFF
+		c.pc = nnn
+		break
 	case 0x2000:
+		// 2NNN Calls subroutine at NNN
 		c.stack[c.sp] = c.pc
 		c.sp++
-		c.pc = c.opcode & 0x0FFF
+		// c.pc = c.opcode & 0x0FFF
+		c.pc = nnn
+		break
+	case 0x3000:
+		// 3XNN Skips the next instruction if VX equals NN. (Usually
+		// the next instruction is a jump to skip a code block)
+		fmt.Println(c.v[x], nn)
+		if c.v[x] == nn {
+			c.pc += 2
+		}
+		c.pc += 2
+		break
+	case 0x4000:
+		// 4XNN Skips the next instruction if VX doesn't equal NN.
+		// (Usually the next instruction is a jump to skip a code
+		// block)
+		if c.v[x] != nn {
+			c.pc += 2
+		}
+		c.pc += 2
+		break
+	case 0x5000:
+		// 5XY0 Skips the next instruction if VX equals VY. (Usually
+		// the next instruction is a jump to skip a code block)
+		if c.v[x] != c.v[y] {
+			c.pc += 2
+		}
+		c.pc += 2
 		break
 	case 0x6000:
-		pos := (c.opcode & 0x0F00) >> 8
-		c.v[pos] = byte(c.opcode)
+		// 6XNN Sets VX to NN
+		c.v[x] = nn
 		c.pc += 2
 		break
 	case 0x7000:
-		c.v[c.opcode&0x0F00>>8] += byte(c.opcode)
+		// 7XNN Adds NN to VX. (Carry flag is not changed)
+		// c.v[c.opcode&0x0F00>>8] += byte(c.opcode)
+		c.v[x] += nn
 		c.pc += 2
 		break
 	case 0x8000:
 		switch c.opcode & 0x000F {
-		case 0x0004: // 0x8XY4
+		case 0x0000:
+			// 0x8XY0 Sets VX to the value of VY
+			c.v[x] = c.v[y]
+			c.pc += 2
+		case 0x0001:
+			// 0x8XY1 Sets VX to VX or VY. (Bitwise OR operation)
+			c.v[x] = (c.v[x] | c.v[y])
+			c.pc += 2
+		case 0x0002:
+			// 0x8XY2 Sets VX to VX and VY. (Bitwise AND operation)
+			c.v[x] = (c.v[x] & c.v[y])
+			c.pc += 2
+		case 0x0003:
+			// 0x8XY3 Sets VX to VX xor VY
+			c.v[x] = (c.v[x] ^ c.v[y])
+			c.pc += 2
+		case 0x0004:
+			// 0x8XY4 Adds VY to VX. VF is set to 1 when there's a
+			// carry, and to 0 when there isn't
 			if c.v[(c.opcode&0x00F0)>>4] > (0xFF - c.v[c.opcode&0x0F00]) {
 				c.v[0xF] = 1
 			} else {
@@ -83,17 +155,80 @@ func (c *chip8) emulateCycle() {
 			c.v[(c.opcode&0x0F00)>>8] += c.v[(c.opcode&0x00F0)>>4]
 			c.pc += 2
 			break
+		case 0x0005:
+			// 0x8XY5 VY is subtracted from VX. VF is set to 0 when
+			// there's a borrow, and 1 when there isn't
+			if c.v[x] > c.v[y] {
+				c.v[0xF] = 0x1
+			} else {
+				c.v[0xF] = 0x0
+			}
+			c.v[x] -= c.v[y]
+			c.pc += 2
+		case 0x0006:
+			// 0x8XY6 Stores the least significant bit of VX in VF
+			// and then shifts VX to the right by 1
+			if c.opcode&0x1 >= 1 {
+				c.v[0xF] = 1
+			} else {
+				c.v[0xF] = 0
+			}
+			c.v[x] = c.v[x] >> 1
+			c.pc += 2
+		case 0x0007:
+			// 0x8XY7 Sets VX to VY minus VX. VF is set to 0 when
+			// there's a borrow, and 1 when there isn't
+			if c.v[y] > c.v[x] {
+				c.v[0xF] = 0x1
+			} else {
+				c.v[0xF] = 0x0
+			}
+			c.v[x] = c.v[y] - c.v[x]
+			c.pc += 2
+		case 0x000E:
+			// 0x8XYE Stores the most significant bit of VX in VF
+			// and then shifts VX to the left by 1
+			if c.opcode&0x80 == 0x80 {
+				c.v[0xF] = 1
+			} else {
+				c.v[0xF] = 0
+			}
+			c.v[x] = c.v[x] << 1
+			c.pc += 2
 		default:
 			fmt.Printf("Unknown opcode [0x8000]: 0x%X\n", c.opcode)
 		}
+	case 0x9000:
+		// 9XY0 Skips the next instruction if VX doesn't equal VY.
+		// (Usually the next instruction is a jump to skip a code
+		// block)
+		if c.v[x] != c.v[y] {
+			c.pc += 2
+		}
+		c.pc += 2
 	case 0xA000:
-		// set index to NNN position
+		// ANNN set index to NNN position
 		c.index = c.opcode & 0x0FFF
 		c.pc += 2
 		break
+	case 0xB000:
+		// BNNN Jumps to the address NNN plus V0
+		c.pc = nnn + uint16(c.v[0])
+	case 0xC000:
+		// CXNN Sets VX to the result of a bitwise and operation on a
+		// random number (Typically: 0 to 255) and NN
+		r := byte(rand.Intn(255))
+		c.v[x] = r & nn
+		c.pc += 2
 	case 0xD000:
-		x := uint16(c.v[(c.opcode&0x0F00)>>8])
-		y := uint16(c.v[(c.opcode&0x00F0)>>4])
+		// DXYN Draws a sprite at coordinate (VX, VY) that has a width
+		// of 8 pixels and a height of N+1 pixels. Each row of 8 pixels
+		// is read as bit-coded starting from memory location I; I
+		// value doesn’t change after the execution of this
+		// instruction. As described above, VF is set to 1 if any
+		// screen pixels are flipped from set to unset when the sprite
+		// is drawn, and to 0 if that doesn’t happen
+		fmt.Printf("D: %X\n", c.opcode)
 		height := c.opcode & 0x000F
 
 		var pixel byte
@@ -102,35 +237,75 @@ func (c *chip8) emulateCycle() {
 			pixel = c.memory[c.index+yline]
 			for xline := uint16(0); xline < 8; xline++ {
 				if (pixel & (0x80 >> xline)) != 0 {
-					if c.gfx[(x+xline+((y+yline)*64))] == 1 {
+					if c.gfx[(w*(uint16(y)+yline)+(uint16(x)+xline))] == 1 {
 						c.v[0xF] = 1
 					}
-					c.gfx[x+xline+((y+yline)*64)] ^= 1
+					c.gfx[w*(uint16(y)+yline)+(uint16(x)+xline)] ^= 1
 				}
 			}
-
 		}
+		// for yline := uint16(0); yline < height; yline++ {
+		//         pixel = c.memory[c.index+yline]
+		//         for xline := uint16(0); xline < 8; xline++ {
+		//                 if (pixel & (0x80 >> xline)) != 0 {
+		//                         if c.gfx[(uint16(x)+xline+((uint16(y)+yline)*64))] == 1 {
+		//                                 c.v[0xF] = 1
+		//                         }
+		//                         c.gfx[uint16(x)+xline+((uint16(y)+yline)*64)] ^= 1
+		//                 }
+		//         }
+		//
+		// }
 		c.drawFlag = true
 		c.pc += 2
 		break
 	case 0xE000:
 		switch c.opcode & 0x00FF {
 		case 0x009E:
+			// EX9E Skips the next instruction if the key stored in
+			// VX is pressed. (Usually the next instruction is a
+			// jump to skip a code block)
 			if c.key[c.v[(c.opcode&0x0F00)>>8]] != 0 {
 				c.pc += 4
 			} else {
 				c.pc += 2
 			}
 			break
+		case 0x00A1:
+			// EXA1 Skips the next instruction if the key stored in
+			// VX isn't pressed. (Usually the next instruction is a
+			// jump to skip a code block)
+			// TODO
+			c.pc += 2
 		}
 		break
 	case 0xF000:
-		x := (c.opcode & 0x0F00) >> 8
-		fmt.Printf("F: 0x%X\n", c.opcode)
 		switch c.opcode & 0x00FF {
-		case 0x0029:
+		case 0x0007:
+			// FX07 Sets VX to the value of the delay timer
+			c.v[x] = c.delayTimer
+			c.pc += 2
+		case 0x000A:
+			// FX0A A key press is awaited, and then stored in VX.
+			// (Blocking Operation. All instruction halted until
+			// next key event)
 			// TODO
-			// c.index = uint16(c.v[x]) *
+			c.pc += 2
+		case 0x0015:
+			// FX15 Sets the delay timer to VX
+			c.delayTimer = c.v[x]
+			c.pc += 2
+		case 0x0018:
+			// FX18 Sets the sound timer to VX
+			c.soundTimer = c.v[x]
+			c.pc += 2
+		case 0x001E:
+			// FX1E Adds VX to I. VF is not affected
+			c.index += uint16(c.v[x])
+			c.pc += 2
+		case 0x0029:
+			// FX29 Sets I to the location of the sprite for the character in VX. Characters 0-F (in hexadecimal) are represented by a 4x5 font
+			c.index = uint16(c.v[x]) * 5
 			c.pc += 2
 			break
 		case 0x0033:
@@ -139,8 +314,21 @@ func (c *chip8) emulateCycle() {
 			c.memory[c.index+2] = (c.v[x] / 100) % 10
 			c.pc += 2
 			break
+		case 0x0055:
+			// FX55 Stores V0 to VX (including VX) in memory
+			// starting at address I. The offset from I is
+			// increased by 1 for each value written, but I itself
+			// is left unmodified
+			for i := uint16(0); i <= uint16(x); i++ {
+				c.memory[c.index+i] = c.v[i]
+			}
+			c.pc += 2
 		case 0x0065:
-			for i := uint16(0); i < x+1; i++ {
+			// 0xFX65 Fills V0 to VX (including VX) with values
+			// from memory starting at address I. The offset from I
+			// is increased by 1 for each value written, but I
+			// itself is left unmodified
+			for i := uint16(0); i < uint16(x)+1; i++ {
 				c.v[i] = c.memory[c.index+i]
 			}
 			c.pc += 2
@@ -195,8 +383,37 @@ var fontSet = [80]byte{
 	0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 }
 
-func (c *chip8) drawGraphics() {
+func (c *chip8) setupInput() {
+}
 
+func (c *chip8) setupGraphics() {
+	window, err := sdl.CreateWindow("go-chip8", sdl.WINDOWPOS_UNDEFINED,
+		sdl.WINDOWPOS_UNDEFINED, w, h, sdl.WINDOW_SHOWN)
+	if err != nil {
+		panic(err)
+	}
+	c.renderer, err = sdl.CreateRenderer(window, -1, 0)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (c *chip8) drawGraphics() {
+	c.renderer.SetDrawColor(255, 255, 255, 1)
+	x := 0
+	y := 0
+	for i := 0; i < len(c.gfx); i++ {
+		if i%w == 0 {
+			// jump line
+			x = 0
+			y++
+		}
+		if c.gfx[i]^1 == 1 {
+			c.renderer.DrawPoint(int32(x), int32(y))
+		}
+	}
+	c.renderer.Present()
+	c.drawFlag = false
 }
 
 func (c *chip8) setKeys() {
@@ -208,10 +425,10 @@ func main() {
 
 	flag.Parse()
 
-	// setupGraphics()
-	// setupInput()
-
 	var c chip8
+	c.setupGraphics()
+	c.setupInput()
+
 	c.initialize()
 	err := c.loadGame(*filepath)
 	if err != nil {
