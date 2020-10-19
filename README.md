@@ -2,11 +2,13 @@
 
 CHIP-8 emulator written in Go.
 
+*(Done with the Rust implementation: https://github.com/arnaucube/chip8-rs)*
+
 https://en.wikipedia.org/wiki/CHIP-8
 
 ### Usage
 ```
-go run main.go -file roms/invaders.c8
+./go-chip8 -file roms/invaders.c8
 ```
 
 ![](screenshots/s00.png)

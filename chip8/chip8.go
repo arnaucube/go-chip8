@@ -37,7 +37,8 @@ type Chip8 struct {
 }
 
 // Initialize registers and memory
-func (c *Chip8) Initialize() {
+func NewChip8() Chip8 {
+	c := Chip8{}
 	c.pc = 0x200
 	c.opcode = 0
 	c.index = 0
@@ -46,6 +47,7 @@ func (c *Chip8) Initialize() {
 	for i := 0; i < len(fontSet); i++ {
 		c.memory[i] = fontSet[i]
 	}
+	return c
 }
 
 // EmulateCycle emulates the chip8 cycle
@@ -59,7 +61,6 @@ func (c *Chip8) EmulateCycle() {
 
 	// Decode Opcode
 	// https://en.wikipedia.org/wiki/CHIP-8#Opcode_table
-	// http://www.multigesture.net/wp-content/uploads/mirror/goldroad/chip8_instruction_set.shtml
 	switch c.opcode & 0xF000 {
 	case 0x0000:
 		switch c.opcode & 0x000F {
@@ -70,26 +71,22 @@ func (c *Chip8) EmulateCycle() {
 			}
 			c.pc += 2
 			c.DrawFlag = true
-			break
 		case 0x000E:
 			// 00EE Returns from a subroutine
 			c.sp--
 			c.pc = c.stack[c.sp]
 			c.pc += 2
-			break
 		default:
 			fmt.Printf("Unknown opcode [0x0000]: 0x%X\n", c.opcode)
 		}
 	case 0x1000:
 		// 1NNN Jumps to address NNN
 		c.pc = nnn
-		break
 	case 0x2000:
 		// 2NNN Calls subroutine at NNN
 		c.stack[c.sp] = c.pc
 		c.sp++
 		c.pc = nnn
-		break
 	case 0x3000:
 		// 3XNN Skips the next instruction if VX equals NN. (Usually
 		// the next instruction is a jump to skip a code block)
@@ -97,7 +94,6 @@ func (c *Chip8) EmulateCycle() {
 			c.pc += 2
 		}
 		c.pc += 2
-		break
 	case 0x4000:
 		// 4XNN Skips the next instruction if VX doesn't equal NN.
 		// (Usually the next instruction is a jump to skip a code
@@ -106,25 +102,21 @@ func (c *Chip8) EmulateCycle() {
 			c.pc += 2
 		}
 		c.pc += 2
-		break
 	case 0x5000:
 		// 5XY0 Skips the next instruction if VX equals VY. (Usually
 		// the next instruction is a jump to skip a code block)
-		if c.v[x] != c.v[y] {
+		if c.v[x] == c.v[y] {
 			c.pc += 2
 		}
 		c.pc += 2
-		break
 	case 0x6000:
 		// 6XNN Sets VX to NN
 		c.v[x] = nn
 		c.pc += 2
-		break
 	case 0x7000:
 		// 7XNN Adds NN to VX. (Carry flag is not changed)
 		c.v[x] += nn
 		c.pc += 2
-		break
 	case 0x8000:
 		switch c.opcode & 0x000F {
 		case 0x0000:
@@ -153,14 +145,13 @@ func (c *Chip8) EmulateCycle() {
 			}
 			c.v[x] += c.v[y]
 			c.pc += 2
-			break
 		case 0x0005:
 			// 0x8XY5 VY is subtracted from VX. VF is set to 0 when
 			// there's a borrow, and 1 when there isn't
 			if c.v[x] > c.v[y] {
-				c.v[0xF] = 0x1
+				c.v[0xF] = 1
 			} else {
-				c.v[0xF] = 0x0
+				c.v[0xF] = 0
 			}
 			c.v[x] -= c.v[y]
 			c.pc += 2
@@ -178,9 +169,9 @@ func (c *Chip8) EmulateCycle() {
 			// 0x8XY7 Sets VX to VY minus VX. VF is set to 0 when
 			// there's a borrow, and 1 when there isn't
 			if c.v[y] > c.v[x] {
-				c.v[0xF] = 0x1
+				c.v[0xF] = 1
 			} else {
-				c.v[0xF] = 0x0
+				c.v[0xF] = 0
 			}
 			c.v[x] = c.v[y] - c.v[x]
 			c.pc += 2
@@ -209,7 +200,6 @@ func (c *Chip8) EmulateCycle() {
 		// ANNN set index to NNN position
 		c.index = nnn
 		c.pc += 2
-		break
 	case 0xB000:
 		// BNNN Jumps to the address NNN plus V0
 		c.pc = nnn + uint16(c.v[0])
@@ -252,7 +242,6 @@ func (c *Chip8) EmulateCycle() {
 
 		c.DrawFlag = true
 		c.pc += 2
-		break
 	case 0xE000:
 		switch c.opcode & 0x00FF {
 		case 0x009E:
@@ -263,7 +252,6 @@ func (c *Chip8) EmulateCycle() {
 				c.pc += 2
 			}
 			c.pc += 2
-			break
 		case 0x00A1:
 			// EXA1 Skips the next instruction if the key stored in
 			// VX isn't pressed. (Usually the next instruction is a
@@ -275,7 +263,6 @@ func (c *Chip8) EmulateCycle() {
 		default:
 			fmt.Printf("Unknown opcode [0xE000]: 0x%X\n", c.opcode)
 		}
-		break
 	case 0xF000:
 		switch c.opcode & 0x00FF {
 		case 0x0007:
@@ -315,13 +302,11 @@ func (c *Chip8) EmulateCycle() {
 			// represented by a 4x5 font
 			c.index = uint16(c.v[x]) * 5
 			c.pc += 2
-			break
 		case 0x0033:
 			c.memory[c.index] = c.v[x] / 100
 			c.memory[c.index+1] = (c.v[x] / 10) % 10
 			c.memory[c.index+2] = (c.v[x] / 100) % 10
 			c.pc += 2
-			break
 		case 0x0055:
 			// FX55 Stores V0 to VX (including VX) in memory
 			// starting at address I. The offset from I is
@@ -336,15 +321,13 @@ func (c *Chip8) EmulateCycle() {
 			// from memory starting at address I. The offset from I
 			// is increased by 1 for each value written, but I
 			// itself is left unmodified
-			for i := uint16(0); i < uint16(x)+1; i++ {
+			for i := uint16(0); i <= uint16(x); i++ {
 				c.v[i] = c.memory[c.index+i]
 			}
 			c.pc += 2
-			break
 		default:
 			fmt.Printf("Unknown opcode [0xF000]: 0x%X\n", c.opcode)
 		}
-		break
 	default:
 		fmt.Printf("Unknown opcode: 0x%X\n", c.opcode)
 	}

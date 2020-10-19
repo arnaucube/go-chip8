@@ -20,8 +20,7 @@ type SdlEmulator struct {
 
 // NewSdlEmulator creates a new SdlEmulator
 func NewSdlEmulator(w, h int, zoom int32) SdlEmulator {
-	var c chip8.Chip8
-	c.Initialize()
+	c := chip8.NewChip8()
 
 	window, err := sdl.CreateWindow("go-chip8", sdl.WINDOWPOS_UNDEFINED,
 		sdl.WINDOWPOS_UNDEFINED, int32(w)*zoom, int32(h)*zoom, sdl.WINDOW_SHOWN)
